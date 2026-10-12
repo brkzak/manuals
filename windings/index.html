@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Lasagna approach</title>
+<meta name="description" content="A visual guide to how Lasagna finds the windings of a rolled papyrus in a CT scan.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="#top">Lasagna manual</a>
+  <nav aria-label="Steps">
+    <a href="#idea" data-sec="idea">Idea</a>
+    <a href="#step1" data-sec="step1"><b>1</b> Read the scan</a>
+    <a href="#step2" data-sec="step2"><b>2</b> Start a mesh</a>
+    <a href="#step3" data-sec="step3"><b>3</b> Fit it</a>
+    <a href="#step4" data-sec="step4"><b>4</b> Export</a>
+    <a href="#reference" data-sec="reference">Reference</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<!-- ============================================================ HERO -->
+<section class="hero">
+  <div class="hero-text">
+    <p class="eyebrow">Vesuvius Challenge · villa / lasagna</p>
+    <h1>The Lasagna approach</h1>
+    <p class="lead">Lasagna finds the windings of a rolled-up papyrus in a CT scan. It does this in four steps. Each step below has a picture you can play with.</p>
+    <ol class="steps-overview">
+      <li><a href="#step1"><span class="n">1</span><span><strong>Read the scan</strong> A neural network turns the CT into three hint fields.</span></a></li>
+      <li><a href="#step2"><span class="n">2</span><span><strong>Start a mesh</strong> A rough stack of layers is placed around a seed point.</span></a></li>
+      <li><a href="#step3"><span class="n">3</span><span><strong>Fit the mesh</strong> An optimizer moves the layers until they agree with the hints.</span></a></li>
+      <li><a href="#step4"><span class="n">4</span><span><strong>Export</strong> Each layer is saved as a surface that VC3D can open.</span></a></li>
+    </ol>
+  </div>
+  <div class="hero-fig">
+    <canvas id="heroStack" role="img" aria-label="A rotating stack of curved mesh layers, like the layers of a lasagna."></canvas>
+  </div>
+</section>
+
+<!-- ============================================================ IDEA -->
+<section id="idea" class="sec">
+  <h2><span class="tag">The idea</span>A scroll is a stack of layers</h2>
+  <p>A papyrus scroll is a long strip of papyrus rolled up around a center. Each turn of the roll is called a <dfn>winding</dfn>. Cut across the scroll and the windings form a spiral.</p>
+  <p>Now look at a small piece of that spiral. Over a short distance the turns run almost parallel to each other, like the layers of a lasagna. Lasagna models each small piece of scroll this way: a stack of layers, one layer for each winding. The task is to find where every layer sits in 3D.</p>
+
+  <figure class="fig" id="figZoom">
+    <div class="stage dark" style="--ar: 720 / 420">
+      <canvas id="zoomCanvas" role="img" aria-label="Cross-section of a scroll drawn as a spiral. When zoomed in, the spiral turns into parallel layers."></canvas>
+      <svg id="zoomLabels" viewBox="0 0 720 420" aria-hidden="true"></svg>
+    </div>
+    <div class="controls">
+      <label for="zoomRange">Zoom</label>
+      <input type="range" id="zoomRange" min="0" max="100" value="0">
+      <button type="button" id="zoomPlay" class="btn">Play</button>
+    </div>
+    <figcaption>Schematic cross-section of a scroll. Drag the slider to zoom in on the marked square. This is a drawing, not scan data.</figcaption>
+  </figure>
+
+  <p class="note">The work is split into two programs. A neural network reads the scan (step 1). An optimizer builds the layers (steps 2 to 4). They share nothing except files on disk, so either one can be replaced without touching the other.</p>
+</section>
+
+<!-- ============================================================ STEP 1 -->
+<section id="step1" class="sec">
+  <h2><span class="tag">Step 1</span>Read the scan</h2>
+  <p>A 3D U-Net looks at the CT in small overlapping tiles. For every voxel it writes three hint values.</p>
+
+  <ul class="hints">
+    <li class="h-cos"><strong>cos</strong> Is there a winding here? The value is 1 on a winding and 0 halfway between two windings. Walk across the layers and it rises and falls once per winding.</li>
+    <li class="h-dens"><strong>density</strong> How close together are the windings? It is high where they are packed tightly and low where they are far apart.</li>
+    <li class="h-dir"><strong>direction</strong> Which way does the surface face? It is stored as a line, not an arrow. For a surface, "up" and "down" mean the same thing.</li>
+  </ul>
+
+  <figure class="fig" id="figHints">
+    <div class="seg" role="group" aria-label="Show">
+      <button type="button" class="on" data-view="scan">Scan</button>
+      <button type="button" data-view="cos">cos</button>
+      <button type="button" data-view="dens">density</button>
+      <button type="button" data-view="dir">direction</button>
+    </div>
+    <div class="hints-row">
+      <div class="stage dark probe-stage" style="--ar: 640 / 400">
+        <canvas class="layer on" data-view="scan"></canvas>
+        <canvas class="layer" data-view="cos"></canvas>
+        <canvas class="layer" data-view="dens"></canvas>
+        <canvas class="layer" data-view="dir"></canvas>
+        <svg id="probeSvg" viewBox="0 0 640 400" role="img" aria-label="Synthetic scan patch with a movable probe. Move the pointer to read the three hint values at that spot."></svg>
+      </div>
+      <svg id="profileSvg" viewBox="0 0 110 400" class="profile" aria-hidden="true"></svg>
+    </div>
+    <dl class="readout" aria-live="off">
+      <div><dt>cos</dt><dd><span id="rdCos">–</span><i class="bar"><b id="rdCosBar"></b></i></dd></div>
+      <div><dt>density</dt><dd><span id="rdDens">–</span></dd></div>
+      <div><dt>direction</dt><dd><span id="rdDir">–</span></dd></div>
+    </dl>
+    <figcaption>Synthetic example. Move the pointer over the picture. The strip on the right shows the cos value along the vertical line through the probe: it peaks once at every winding.</figcaption>
+  </figure>
+
+  <p>The network sees the scan and nothing else. It does not know which winding is which, because cos repeats. It only knows where windings are, how far apart they are and how they are tilted. Counting windings is left to the fitter in step 3.</p>
+  <p>In the blurry spot of the example, the scan view is unclear but the cos view stays clean. The network fills that area in from its surroundings, so values there are less certain.</p>
+
+  <details class="more">
+    <summary>How the network learned this</summary>
+    <div class="more-body">
+      <p>The network was trained on scans where people had already traced surfaces by hand. From the traced surfaces, the training code works out the correct cos, density and direction for every voxel. The network is then trained to reproduce those values from the scan alone.</p>
+      <svg class="flow" viewBox="0 0 640 150" role="img" aria-label="Training flow: traced surfaces give labels; the network learns to predict the labels from the scan; the loss compares them.">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+        </defs>
+        <g class="box"><rect x="6" y="14" width="138" height="48" rx="8"/><text x="75" y="43">CT scan</text></g>
+        <g class="box"><rect x="6" y="88" width="138" height="48" rx="8"/><text x="75" y="106">Hand-traced</text><text x="75" y="124">surfaces</text></g>
+        <g class="box"><rect x="206" y="88" width="138" height="48" rx="8"/><text x="275" y="106">Correct cos,</text><text x="275" y="124">density, direction</text></g>
+        <g class="box net"><rect x="206" y="14" width="138" height="48" rx="8"/><text x="275" y="43">3D U-Net</text></g>
+        <g class="box"><rect x="406" y="14" width="138" height="48" rx="8"/><text x="475" y="32">Predicted cos,</text><text x="475" y="50">density, direction</text></g>
+        <g class="box loss"><rect x="406" y="88" width="138" height="48" rx="8"/><text x="475" y="117">Compare</text></g>
+        <path class="arrow" d="M144 38 H206" marker-end="url(#ah)"/>
+        <path class="arrow" d="M144 112 H206" marker-end="url(#ah)"/>
+        <path class="arrow" d="M344 38 H406" marker-end="url(#ah)"/>
+        <path class="arrow" d="M344 112 H406" marker-end="url(#ah)"/>
+        <path class="arrow" d="M475 62 V88" marker-end="url(#ah)"/>
+        <path class="arrow back" d="M406 126 C 380 150, 300 150, 290 62" marker-end="url(#ah)"/>
+        <text class="cap" x="580" y="116" text-anchor="start">error</text>
+        <text class="cap" x="580" y="132" text-anchor="start">adjusts the</text>
+        <text class="cap" x="580" y="148" text-anchor="start">network</text>
+      </svg>
+    </div>
+  </details>
+
+  <h3>In practice</h3>
+  <p>The whole volume is processed in overlapping tiles, on one or more GPUs. The result is written to disk as OME-Zarr volumes, plus a <code>.lasagna.json</code> file that lists them. A run can be resumed if it is interrupted.</p>
+<pre><code>python lasagna/preprocess_cos_omezarr.py predict3d \
+  --input vol.zarr --output pred.lasagna.json \
+  --unet-checkpoint model_best.pt --cos-scaledown 2 --scaledown 4</code></pre>
+</section>
+
+<!-- ============================================================ STEP 2 -->
+<section id="step2" class="sec">
+  <h2><span class="tag">Step 2</span>Start a mesh</h2>
+  <p>The fitter describes the scroll with a <dfn>mesh</dfn>: a grid of 3D points. Lasagna keeps one grid for every winding and stacks them. Rows of a grid follow the height of the scroll. Columns follow the winding around the scroll.</p>
+  <p>To begin, the user gives a <dfn>seed</dfn>, a point that lies on one winding. The fitter also needs a rough first guess for the shape. This can be a cylinder or shell around the scroll center, or an existing surface. The first guess is smooth and its layers are evenly spaced, so it does not follow the real windings yet. Fixing that is step 3.</p>
+
+  <figure class="fig" id="figStart">
+    <div class="start-row">
+      <div class="stage dark" style="--ar: 640 / 400">
+        <canvas id="startCanvas" role="img" aria-label="Scan patch with a seed point and a first guess of evenly spaced layers that do not match the real windings."></canvas>
+        <svg id="startSvg" viewBox="0 0 640 400" aria-hidden="true"></svg>
+      </div>
+      <div class="stage panel" style="--ar: 1 / 1">
+        <canvas id="startStack" role="img" aria-label="The same layers shown as a 3D stack of mesh grids."></canvas>
+        <span class="note-tag">One layer = one grid of points</span>
+      </div>
+    </div>
+    <div class="controls">
+      <label for="layerCount">Layers to model</label>
+      <input type="range" id="layerCount" min="3" max="9" value="7">
+      <output id="layerCountOut">7</output>
+    </div>
+    <figcaption>Left: a slice through the scan with the seed (pulsing ring) and the first guess. The guess has the right number of layers and spacing, but the wrong shape. Right: the same layers as a 3D stack. Drag to rotate.</figcaption>
+  </figure>
+</section>
+
+<!-- ============================================================ STEP 3 -->
+<section id="step3" class="sec">
+  <h2><span class="tag">Step 3</span>Fit the mesh</h2>
+  <p>Now the optimizer moves the mesh points, a little at a time. After every step it checks how badly the mesh breaks a list of rules. The amounts are added into one number called the <dfn>loss</dfn>. The points then move in the direction that makes the loss smaller. This is gradient descent. There is no neural network in this step.</p>
+  <p>Press play. The three rules below are a simplified version of what the real fit does.</p>
+
+  <figure class="fig" id="figFit">
+    <div class="seg" role="group" aria-label="Background">
+      <button type="button" class="on" data-bg="scan">Scan</button>
+      <button type="button" data-bg="cos">cos</button>
+    </div>
+    <div class="stage dark" style="--ar: 640 / 400">
+      <canvas class="layer on" data-bg="scan"></canvas>
+      <canvas class="layer" data-bg="cos"></canvas>
+      <svg id="fitSvg" viewBox="0 0 640 400" role="img" aria-label="Mesh layers moving onto the windings of the scan."></svg>
+    </div>
+    <div class="controls wrap">
+      <button type="button" id="fitPlay" class="btn">Play</button>
+      <button type="button" id="fitReset" class="btn ghost">Reset</button>
+      <label class="chk"><input type="checkbox" id="rulePull" checked> Stay on the winding</label>
+      <label class="chk"><input type="checkbox" id="ruleDir" checked> Face the right way</label>
+      <label class="chk"><input type="checkbox" id="ruleSmooth" checked> Stay smooth</label>
+    </div>
+    <p class="meter">Step <b id="fitIter">0</b> · average distance from the winding <b id="fitErr">–</b> px</p>
+    <figcaption>Turn a rule off while it runs to see what it was doing. With only "face the right way", the lines tilt correctly but drift sideways. Without "stay smooth", they get ragged.</figcaption>
+  </figure>
+
+  <h3>The rules</h3>
+  <p>The real fit uses more rules than the toy. Each has a weight in the config file, so a stage can emphasize some and ignore others.</p>
+
+  <div class="cards">
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="A short line turns until it is square to an arrow.">
+        <line class="hint-d" x1="80" y1="60" x2="80" y2="16"/><path class="hint-d fill" d="M80 10 L74 22 L86 22 z"/>
+        <g><line class="mesh" x1="34" y1="60" x2="126" y2="60"/>
+          <animateTransform attributeName="transform" type="rotate" values="26 80 60;0 80 60;0 80 60;26 80 60" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite" calcMode="spline" keySplines=".4 0 .2 1;0 0 1 1;.4 0 .2 1"/>
+        </g>
+        <circle class="dot" cx="80" cy="60" r="3"/>
+      </svg>
+      <h4>Face the right way</h4>
+      <p>The layer must be square to the direction hint, so its normal lines up with the arrow.</p>
+      <code>normal</code>
+    </article>
+
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="Uneven dots slide until they are evenly spaced.">
+        <line class="mesh thin" x1="14" y1="50" x2="146" y2="50"/>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="20;20;20" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="38;44;44;38" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="70;68;68;70" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="78;92;92;78" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="118;116;116;118" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="140;140;140" dur="4s" repeatCount="indefinite"/></circle>
+      </svg>
+      <h4>Keep the grid even</h4>
+      <p>Neighboring points in a row stay about one mesh step apart, so the grid does not bunch up.</p>
+      <code>step</code>
+    </article>
+
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="A zigzag line relaxes into a gentle curve.">
+        <path class="mesh" d="M10 60 L35 30 L60 78 L85 28 L110 76 L135 40 L150 58" fill="none">
+          <animate attributeName="d" dur="4s" repeatCount="indefinite" keyTimes="0;.4;.7;1"
+            values="M10 60 L35 30 L60 78 L85 28 L110 76 L135 40 L150 58;M10 60 L35 52 L60 48 L85 46 L110 48 L135 52 L150 56;M10 60 L35 52 L60 48 L85 46 L110 48 L135 52 L150 56;M10 60 L35 30 L60 78 L85 28 L110 76 L135 40 L150 58"/>
+        </path>
+      </svg>
+      <h4>Stay smooth</h4>
+      <p>The surface may curve but it may not crumple. Sharp bends and folds are penalized.</p>
+      <code>smooth</code> <code>bend</code>
+    </article>
+
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="A point slides toward a bright surface.">
+        <defs><linearGradient id="gDt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--cos)" stop-opacity="0"/><stop offset="1" stop-color="var(--cos)" stop-opacity=".55"/></linearGradient></defs>
+        <rect x="10" y="10" width="140" height="66" fill="url(#gDt)"/>
+        <line class="surf" x1="10" y1="76" x2="150" y2="76"/>
+        <line class="guide" x1="80" y1="76" x2="80" y2="22"><animate attributeName="y2" values="22;76;76;22" keyTimes="0;.5;.8;1" dur="4s" repeatCount="indefinite"/></line>
+        <circle class="dot big" cx="80" cy="22" r="5"><animate attributeName="cy" values="22;76;76;22" keyTimes="0;.5;.8;1" dur="4s" repeatCount="indefinite"/></circle>
+      </svg>
+      <h4>Sit on a surface</h4>
+      <p>An optional second model predicts the distance to the nearest surface. Points are pulled toward distance zero.</p>
+      <code>pred_dt</code>
+    </article>
+
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="A layer moves until it is exactly one winding from the layer below it.">
+        <line class="mesh" x1="14" y1="78" x2="146" y2="78"/>
+        <g stroke="var(--dens)" stroke-width="1.5" opacity=".7">
+          <line x1="30" y1="78" x2="30" y2="50"/><line x1="60" y1="78" x2="60" y2="50"/><line x1="90" y1="78" x2="90" y2="50"/><line x1="120" y1="78" x2="120" y2="50"/>
+        </g>
+        <line class="mesh" x1="14" y1="20" x2="146" y2="20"><animate attributeName="y1" values="20;50;50;20" keyTimes="0;.5;.8;1" dur="4s" repeatCount="indefinite"/><animate attributeName="y2" values="20;50;50;20" keyTimes="0;.5;.8;1" dur="4s" repeatCount="indefinite"/></line>
+        <text class="small" x="146" y="95" text-anchor="end">gap = 1 winding</text>
+      </svg>
+      <h4>Next layer, next winding</h4>
+      <p>Add up the density between two layers. The total must be 1, so the next layer is exactly one winding away. This is how the fit counts windings.</p>
+      <code>winding_density</code>
+    </article>
+  </div>
+
+  <h3>Coarse to fine</h3>
+  <p>Moving single points would be slow, and a small error in one place could never pull its neighbors along. So the mesh is stored as a pyramid of five levels. The top level has only a few points and moves large regions together. Each level below adds finer detail on top of the one above.</p>
+
+  <figure class="fig" id="figPyr">
+    <svg id="pyrSvg" viewBox="0 0 640 240" role="img" aria-label="A wavy target curve and a mesh fit that gets more accurate as more points are added."></svg>
+    <div class="controls wrap">
+      <div class="seg" role="group" aria-label="Pyramid level" id="pyrLevels"></div>
+      <button type="button" id="pyrPlay" class="btn">Play</button>
+    </div>
+    <p class="meter" id="pyrInfo"></p>
+    <figcaption>One line of the mesh, fitted with more and more points. The grey curve is the shape the line has to follow.</figcaption>
+  </figure>
+
+  <h3>Stages</h3>
+  <p>A config file lists the stages of a fit. Each stage sets the number of steps, the learning rate (how far points may move per step), and the weight of each rule. The default <a href="../../lasagna/configs/init.json"><code>init.json</code></a> runs two stages:</p>
+  <div class="stages" aria-label="Two stages of the default config">
+    <div class="stage-bar" style="--w: 67"><b>Stage 1</b> 1,000 steps · learning rate 0.1<small>large moves</small></div>
+    <div class="stage-bar s2" style="--w: 33"><b>Stage 2</b> 500 steps · 0.01<small>careful moves</small></div>
+  </div>
+</section>
+
+<!-- ============================================================ STEP 4 -->
+<section id="step4" class="sec">
+  <h2><span class="tag">Step 4</span>Export the surfaces</h2>
+  <p>When the fit is done, every layer of the mesh is a surface of its own. <code>fit2tifxyz.py</code> writes one folder per winding in the <dfn>tifxyz</dfn> format. The folder holds three images, <code>x.tif</code>, <code>y.tif</code> and <code>z.tif</code>, plus a small <code>meta.json</code>.</p>
+  <p>Pixel (row, column) in those images stores the x, y and z coordinate of one mesh point. VC3D, the Volume Cartographer app, opens these surfaces directly. It can also start a fit by calling <code>fit_service.py</code> over HTTP.</p>
+
+  <figure class="fig" id="figExport">
+    <div class="export-row">
+      <div class="stage panel" style="--ar: 1 / 1">
+        <canvas id="exportStack" role="img" aria-label="The mesh layers pulled apart. One layer is highlighted."></canvas>
+      </div>
+      <div class="export-side">
+        <div class="controls wrap">
+          <label for="explode">Pull apart</label>
+          <input type="range" id="explode" min="0" max="100" value="0">
+        </div>
+        <div class="seg layer-pick" id="layerPick" role="group" aria-label="Choose a layer"></div>
+        <pre class="tree" id="tree"></pre>
+        <div class="tifs">
+          <figure><canvas id="tifX" width="48" height="32"></canvas><figcaption>x.tif</figcaption></figure>
+          <figure><canvas id="tifY" width="48" height="32"></canvas><figcaption>y.tif</figcaption></figure>
+          <figure><canvas id="tifZ" width="48" height="32"></canvas><figcaption>z.tif</figcaption></figure>
+        </div>
+        <p class="meter" id="tifRead">Point the cursor at an image to read one pixel.</p>
+      </div>
+    </div>
+    <figcaption>Pick a layer to see its three coordinate images. Brighter means a larger coordinate. The numbers in the readout are made up for this example.</figcaption>
+  </figure>
+
+  <p>The export converts mesh coordinates back to the voxel units of the original scan, so the surfaces line up with the full-resolution volume.</p>
+<pre><code>python lasagna/fit2tifxyz.py --input model.pt --output out_tifxyz/</code></pre>
+</section>
+
+<!-- ============================================================ REFERENCE -->
+<section id="reference" class="sec">
+  <h2><span class="tag">Reference</span>Words, files and limits</h2>
+
+  <h3>Words used on this page</h3>
+  <dl class="gloss">
+    <div><dt>Winding</dt><dd>One turn of the roll around its center.</dd></div>
+    <div><dt>Layer</dt><dd>One winding as it appears in the model: a grid of 3D points. The code and some docs call this a "sheet". In scroll anatomy a sheet is a manufactured piece of papyrus, and one sheet can span several windings. This page says layer or winding to avoid the mix-up.</dd></div>
+    <div><dt>Hint fields</dt><dd>The cos, density and direction values predicted by the network. The code calls them channels.</dd></div>
+    <div><dt>Normal</dt><dd>The direction that points straight out of a surface.</dd></div>
+    <div><dt>Seed</dt><dd>A point on one winding where a fit starts.</dd></div>
+    <div><dt>Mesh</dt><dd>A grid of connected 3D points that describes a surface.</dd></div>
+    <div><dt>Voxel</dt><dd>One cell of the 3D scan.</dd></div>
+    <div><dt>OME-Zarr</dt><dd>A chunked file format for volumes that are too large to load at once.</dd></div>
+    <div><dt>tifxyz</dt><dd>A surface stored as three images (x, y, z) plus a <code>meta.json</code>.</dd></div>
+    <div><dt>VC3D</dt><dd>The Volume Cartographer app, used to view and edit surfaces.</dd></div>
+  </dl>
+
+  <h3>Where each step lives</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Step</th><th>Files in <code>lasagna/</code></th></tr></thead>
+    <tbody>
+      <tr><td>Training the network</td><td><a href="../../lasagna/train_tifxyz.py">train_tifxyz.py</a>, <a href="../../lasagna/tifxyz_lasagna_dataset.py">tifxyz_lasagna_dataset.py</a>, <a href="../../lasagna/tifxyz_labels.py">tifxyz_labels.py</a></td></tr>
+      <tr><td>1 Read the scan</td><td><a href="../../lasagna/preprocess_cos_omezarr.py">preprocess_cos_omezarr.py</a>, <a href="../../lasagna/tiled_predict3d.py">tiled_predict3d.py</a>, <a href="../../lasagna/manager">manager/</a> (the <code>las_manager</code> command)</td></tr>
+      <tr><td>2 Start a mesh</td><td><a href="../../lasagna/fit.py">fit.py</a>, <a href="../../lasagna/model.py">model.py</a>, <a href="../../lasagna/fit_data.py">fit_data.py</a></td></tr>
+      <tr><td>3 Fit the mesh</td><td><a href="../../lasagna/optimizer.py">optimizer.py</a>, the <code>opt_loss_*.py</code> files (one per rule), <a href="../../lasagna/configs">configs/</a></td></tr>
+      <tr><td>4 Export</td><td><a href="../../lasagna/fit2tifxyz.py">fit2tifxyz.py</a>, <a href="../../lasagna/fit_service.py">fit_service.py</a>, <a href="../../lasagna/tifxyz_format.md">tifxyz_format.md</a></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The neural network itself is not defined in <code>lasagna/</code>. It is the configurable U-Net from the sibling <code>vesuvius</code> package. For more detail, start with <a href="../../lasagna/docs/status.md">docs/status.md</a> and <a href="../../lasagna/lasagna_3d.md">lasagna_3d.md</a>.</p>
+
+  <h3>Things to keep in mind</h3>
+  <ul class="plain">
+    <li>The fit is only as good as the hints. Where the scan is damaged, cos and direction can be wrong, and the mesh will follow them.</li>
+    <li>A fit covers a limited region around the seed, not the whole scroll at once.</li>
+    <li>The pictures on this page are schematic. They use made-up data to show the idea.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer class="foot">
+  <p>Static page. No server or network needed: open <code>manuals/lasagna/index.html</code> in a browser.</p>
+</footer>
+
+<script src="lasagna.js"></script>
+</body>
+</html>
