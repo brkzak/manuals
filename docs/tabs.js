@@ -49,8 +49,6 @@ function show(tab) {
     buildSubnav(tab);
     const label = $('[role="tab"][aria-selected="true"]').textContent.trim();
     document.title = label + ' · Finding the windings';
-    const activeTab = $('[role="tab"][aria-selected="true"]');
-    if (activeTab.scrollIntoView) activeTab.scrollIntoView({ block: 'nearest', inline: 'center' });
   }
   return tab;
 }

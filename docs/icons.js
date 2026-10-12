@@ -36,5 +36,6 @@ const icons = {
     <path d="M75 38 L80 30 L85 38" stroke="var(--dir)" stroke-width="2" fill="none"><animate attributeName="opacity" values="0;1;0;0" keyTimes="0;.25;.5;1" ${T}/></path>`),
 };
 $$('.icon[data-icon]').forEach(el => { el.innerHTML = icons[el.dataset.icon] || ''; });
+window.Manual.fixVars(document);
 window.Manual.icons = icons;
 })();

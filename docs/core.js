@@ -7,9 +7,23 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const SVGNS = 'http://www.w3.org/2000/svg';
+/* Safari ignores var(--x) in SVG presentation attributes (fill="var(--mesh)") and paints
+   them black. Move such values into inline style, which every browser resolves. */
+const VAR_ATTRS = ['fill', 'stroke', 'stop-color', 'color'];
+const setAttr = (e, k, v) => {
+  if (VAR_ATTRS.includes(k) && typeof v === 'string' && v.includes('var(')) e.style.setProperty(k, v);
+  else e.setAttribute(k, v);
+};
+const fixVars = (root = document) => {
+  const sel = VAR_ATTRS.map(a => `[${a}*="var("]`).join(',');
+  root.querySelectorAll(sel).forEach(e => VAR_ATTRS.forEach(a => {
+    const v = e.getAttribute(a);
+    if (v && v.includes('var(')) { e.style.setProperty(a, v); e.removeAttribute(a); }
+  }));
+};
 const svgEl = (tag, attrs = {}, parent) => {
   const e = document.createElementNS(SVGNS, tag);
-  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  for (const k in attrs) setAttr(e, k, attrs[k]);
   if (parent) parent.appendChild(e);
   return e;
 };
@@ -47,6 +61,7 @@ function frame(now) {
   lastT = now;
   for (const t of tickers) if (t.vis.visible) t.fn(dt, now / 1000);
   requestAnimationFrame(frame);
+fixVars(document);
 }
 requestAnimationFrame(frame);
 
@@ -276,7 +291,7 @@ const spiralPts = (a, b, t = 1, step = 0.12) => {
 const ptsToPath = pts => pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join('');
 
 window.Manual = {
-  $, $$, svgEl, clamp, lerp, smooth, ease, TAU, motionOK, cssVar, parseHex, mix, rgba,
+  $, $$, svgEl, fixVars, clamp, lerp, smooth, ease, TAU, motionOK, cssVar, parseHex, mix, rgba,
   themeListeners, visibility, addTicker, sizeCanvas, onResize, rng,
   SW, SH, warp, dwarp, wf, wgrad, yOfWinding, valueNoise, hsl2rgb,
   scene, paintLayerCanvases, segSwitch, Stack3D,
