@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finding the windings</title>
+<meta name="description" content="A visual guide to the ways this repo finds the windings of a rolled papyrus in a CT scan: Lasagna, the patch tracer, fibers, the spiral fit, the winding model and ThaumatoAnakalyptor.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%23c2410c%27/%3E%3Cpath d=%27M5 11h22M5 16h22M5 21h22%27 stroke=%27%23fff%27 stroke-width=%273%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="toprow">
+    <a class="brand" href="#overview">Winding manual</a>
+    <div class="tabs" role="tablist" aria-label="Approaches">
+      <button type="button" role="tab" id="tab-overview" data-tab="overview" aria-controls="panel-overview" aria-selected="true">Overview</button>
+      <button type="button" role="tab" id="tab-lasagna" data-tab="lasagna" aria-controls="panel-lasagna" aria-selected="false">Lasagna</button>
+      <button type="button" role="tab" id="tab-tracer" data-tab="tracer" aria-controls="panel-tracer" aria-selected="false">Tracer</button>
+      <button type="button" role="tab" id="tab-fibers" data-tab="fibers" aria-controls="panel-fibers" aria-selected="false">Fibers &amp; atlas</button>
+      <button type="button" role="tab" id="tab-spiral" data-tab="spiral" aria-controls="panel-spiral" aria-selected="false">Spiral fit</button>
+      <button type="button" role="tab" id="tab-winding" data-tab="winding" aria-controls="panel-winding" aria-selected="false">Winding model</button>
+      <button type="button" role="tab" id="tab-thaumato" data-tab="thaumato" aria-controls="panel-thaumato" aria-selected="false">Thaumato (old)</button>
+    </div>
+  </div>
+  <nav class="subnav" id="subnav" aria-label="On this tab"></nav>
+</header>
+
+<main id="top">
+<div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" class="panel">
+  <header class="phead">
+    <p class="eyebrow">Vesuvius Challenge · villa</p>
+    <h1>Finding the windings</h1>
+    <p class="lead">A CT scan is a block of voxels. It does not say which voxels belong to which turn of the roll. This repo holds several ways to work that out. Each tab covers one of them. This page gives the big picture.</p>
+  </header>
+
+  <section id="overview-problem" class="sec" data-nav="The problem">
+    <h2><span class="tag">The problem</span>The scan does not know about windings</h2>
+    <p>Every voxel in a scan has a brightness and nothing else. No label says "this belongs to the third winding". No record says which pieces of papyrus touch. Each method on these pages creates that missing information.</p>
+    <p>Three things make it hard:</p>
+    <ul class="plain">
+      <li>Windings can be packed so tightly that the scan blurs them together.</li>
+      <li>The papyrus is cracked, folded and missing in places.</li>
+      <li>A small mistake can send a trace onto the neighboring winding with no warning. Everything after that point is wrong.</li>
+    </ul>
+    <p>The output of every approach is the same kind of thing: surfaces, stored as <code>tifxyz</code> meshes, that VC3D can open and flatten.</p>
+  </section>
+
+  <section id="overview-directions" class="sec" data-nav="Two directions">
+    <h2><span class="tag">Two directions</span>Grow pieces, or bend a whole</h2>
+    <p><strong>Bottom-up.</strong> Find small pieces of surface first, then grow and join them. The tracer, Lasagna, Copy Out/In, fibers and the old ThaumatoAnakalyptor pipeline work like this. They are accurate where the scan is clear. They stall, or switch windings, where it is not.</p>
+    <p><strong>Top-down.</strong> Assume the whole scroll is one spiral, then bend that spiral until it agrees with all the evidence. The spiral fit works like this. A gap in the evidence does not stop it, because the spiral itself fills the gap.</p>
+    <p>The neural winding model sits between the two. It reads winding numbers straight out of the scan along rays, and passes them to the spiral fit.</p>
+
+    <figure class="fig" id="ovDirections">
+      <div class="two">
+        <div>
+          <h4 class="mini">Bottom-up</h4>
+          <div class="stage dark" style="--ar: 320 / 260"><svg id="ovBottom" viewBox="0 0 320 260" role="img" aria-label="Several short pieces of surface grow along a crushed spiral until they reach gaps."></svg></div>
+        </div>
+        <div>
+          <h4 class="mini">Top-down</h4>
+          <div class="stage dark" style="--ar: 320 / 260"><svg id="ovTop" viewBox="0 0 320 260" role="img" aria-label="An ideal spiral bends until it lies on the crushed spiral, passing over the gaps."></svg></div>
+        </div>
+      </div>
+      <div class="controls"><button type="button" id="ovReplay" class="btn">Replay</button></div>
+      <figcaption>Schematic. Left: pieces grow until they reach a gap, and the gaps stay. Right: one spiral bends to fit and covers the gaps. The faint curve is where the windings really are.</figcaption>
+    </figure>
+  </section>
+
+  <section id="overview-map" class="sec" data-nav="How they connect">
+    <h2><span class="tag">How they connect</span>What feeds what</h2>
+    <p>The methods are not rivals. Several of them produce the inputs that the spiral fit consumes. Click a box to open its tab.</p>
+    <figure class="fig" id="ovMap">
+      <svg id="ovFlow" viewBox="0 0 880 480" class="flowbig" role="img" aria-label="Diagram of how the scan, surface prediction, local tracers, fibers, annotations and the winding model feed the spiral fit, which produces one surface per winding."></svg>
+      <figcaption>Based on the inputs listed in the spiral fit tutorial and the winding model code. Boxes with a colored outline have a tab. The loop between the spiral fit and the winding model is real: the model casts its rays from a fitted spiral, and its output goes back into the next fit.</figcaption>
+    </figure>
+  </section>
+
+  <section id="overview-table" class="sec" data-nav="At a glance">
+    <h2><span class="tag">At a glance</span>The approaches side by side</h2>
+    <div class="tablewrap">
+    <table class="compare">
+      <thead><tr><th>Approach</th><th>Starts from</th><th>Produces</th><th>Covers</th><th>Good to know</th></tr></thead>
+      <tbody>
+        <tr><td><a href="#lasagna">Lasagna</a></td><td>Hint fields from a 3D U-Net, plus a seed</td><td>A stack of surfaces</td><td>A region, several windings at once</td><td>The fit runs on a CUDA GPU by default</td></tr>
+        <tr><td><a href="#tracer">Tracer (GrowPatch)</a></td><td>A surface prediction, normal grids and a seed</td><td>One surface patch</td><td>A region, grown outward</td><td>Needs a person to check it. Part of VC3D</td></tr>
+        <tr><td><a href="#tracer/copy">Copy Out/In</a></td><td>One traced winding</td><td>The winding next to it</td><td>Neighbors of a patch</td><td>Errors in the source are copied too</td></tr>
+        <tr><td><a href="#fibers">Fibers and atlas</a></td><td>Control points from a person, plus predicted fields</td><td>Fiber lines and winding offsets between them</td><td>Sparse lines</td><td>Semi-automatic. Crossings need a decision</td></tr>
+        <tr><td><a href="#spiral">Spiral fit</a></td><td>Any mix of patches, fibers, annotations and fields</td><td>One surface per winding</td><td>The whole scroll</td><td>Needs an NVIDIA GPU. Under-constrained where evidence is thin</td></tr>
+        <tr><td><a href="#winding">Winding model</a></td><td>A fitted spiral and the scan</td><td>Winding numbers along rays, and a dense field</td><td>Along rays through the volume</td><td>A neural network. Needs a spiral to seed its rays</td></tr>
+        <tr><td><a href="#thaumato">ThaumatoAnakalyptor</a></td><td>The scan only</td><td>A mesh of long sheets</td><td>Long sheets of a scroll</td><td>Older and deprecated. Won the 2023 Grand Prize</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+</div>
+
+<div id="panel-lasagna" role="tabpanel" aria-labelledby="tab-lasagna" class="panel" hidden>
+
+<!-- ============================================================ HERO -->
+<section class="hero" id="lasagna-top">
+  <div class="hero-text">
+    <p class="eyebrow">Vesuvius Challenge · villa / lasagna</p>
+    <h1>The Lasagna approach</h1>
+    <p class="lead">Lasagna finds the windings of a rolled-up papyrus in a CT scan. It does this in four steps. Each step below has a picture you can play with.</p>
+    <ol class="steps-overview">
+      <li><a href="#lasagna/step1"><span class="n">1</span><span><strong>Read the scan</strong> A neural network turns the CT into three hint fields.</span></a></li>
+      <li><a href="#lasagna/step2"><span class="n">2</span><span><strong>Start a mesh</strong> A rough stack of layers is placed around a seed point.</span></a></li>
+      <li><a href="#lasagna/step3"><span class="n">3</span><span><strong>Fit the mesh</strong> An optimizer moves the layers until they agree with the hints.</span></a></li>
+      <li><a href="#lasagna/step4"><span class="n">4</span><span><strong>Export</strong> Each layer is saved as a surface that VC3D can open.</span></a></li>
+    </ol>
+  </div>
+  <div class="hero-fig">
+    <canvas id="heroStack" role="img" aria-label="A rotating stack of curved mesh layers, like the layers of a lasagna."></canvas>
+  </div>
+</section>
+
+<!-- ============================================================ IDEA -->
+<section id="lasagna-idea" class="sec" data-nav="The idea">
+  <h2><span class="tag">The idea</span>A scroll is a stack of layers</h2>
+  <p>A papyrus scroll is a long strip of papyrus rolled up around a center. Each turn of the roll is called a <dfn>winding</dfn>. Cut across the scroll and the windings form a spiral.</p>
+  <p>Now look at a small piece of that spiral. Over a short distance the turns run almost parallel to each other, like the layers of a lasagna. Lasagna models each small piece of scroll this way: a stack of layers, one layer for each winding. The task is to find where every layer sits in 3D.</p>
+
+  <figure class="fig" id="figZoom">
+    <div class="stage dark" style="--ar: 720 / 420">
+      <canvas id="zoomCanvas" role="img" aria-label="Cross-section of a scroll drawn as a spiral. When zoomed in, the spiral turns into parallel layers."></canvas>
+      <svg id="zoomLabels" viewBox="0 0 720 420" aria-hidden="true"></svg>
+    </div>
+    <div class="controls">
+      <label for="zoomRange">Zoom</label>
+      <input type="range" id="zoomRange" min="0" max="100" value="0">
+      <button type="button" id="zoomPlay" class="btn">Play</button>
+    </div>
+    <figcaption>Schematic cross-section of a scroll. Drag the slider to zoom in on the marked square. This is a drawing, not scan data.</figcaption>
+  </figure>
+
+  <p class="note">The work is split into two programs. A neural network reads the scan (step 1). An optimizer builds the layers (steps 2 to 4). They share nothing except files on disk, so either one can be replaced without touching the other.</p>
+</section>
+
+<!-- ============================================================ STEP 1 -->
+<section id="lasagna-step1" class="sec" data-nav="Read the scan" data-badge="1">
+  <h2><span class="tag">Step 1</span>Read the scan</h2>
+  <p>A 3D U-Net looks at the CT in small overlapping tiles. For every voxel it writes three hint values.</p>
+
+  <ul class="hints">
+    <li class="h-cos"><strong>cos</strong> Is there a winding here? The value is 1 on a winding and 0 halfway between two windings. Walk across the layers and it rises and falls once per winding.</li>
+    <li class="h-dens"><strong>density</strong> How close together are the windings? It is high where they are packed tightly and low where they are far apart.</li>
+    <li class="h-dir"><strong>direction</strong> Which way does the surface face? It is stored as a line, not an arrow. For a surface, "up" and "down" mean the same thing.</li>
+  </ul>
+
+  <figure class="fig" id="figHints">
+    <div class="seg" role="group" aria-label="Show">
+      <button type="button" class="on" data-view="scan">Scan</button>
+      <button type="button" data-view="cos">cos</button>
+      <button type="button" data-view="dens">density</button>
+      <button type="button" data-view="dir">direction</button>
+    </div>
+    <div class="hints-row">
+      <div class="stage dark probe-stage" style="--ar: 640 / 400">
+        <canvas class="layer on" data-view="scan"></canvas>
+        <canvas class="layer" data-view="cos"></canvas>
+        <canvas class="layer" data-view="dens"></canvas>
+        <canvas class="layer" data-view="dir"></canvas>
+        <svg id="probeSvg" viewBox="0 0 640 400" role="img" aria-label="Synthetic scan patch with a movable probe. Move the pointer to read the three hint values at that spot."></svg>
+      </div>
+      <svg id="profileSvg" viewBox="0 0 110 400" class="profile" aria-hidden="true"></svg>
+    </div>
+    <dl class="readout" aria-live="off">
+      <div><dt>cos</dt><dd><span id="rdCos">–</span><i class="bar"><b id="rdCosBar"></b></i></dd></div>
+      <div><dt>density</dt><dd><span id="rdDens">–</span></dd></div>
+      <div><dt>direction</dt><dd><span id="rdDir">–</span></dd></div>
+    </dl>
+    <figcaption>Synthetic example. Move the pointer over the picture. The strip on the right shows the cos value along the vertical line through the probe: it peaks once at every winding.</figcaption>
+  </figure>
+
+  <p>The network sees the scan and nothing else. It does not know which winding is which, because cos repeats. It only knows where windings are, how far apart they are and how they are tilted. Counting windings is left to the fitter in step 3.</p>
+  <p>In the blurry spot of the example, the scan view is unclear but the cos view stays clean. The network fills that area in from its surroundings, so values there are less certain.</p>
+
+  <details class="more">
+    <summary>How the network learned this</summary>
+    <div class="more-body">
+      <p>The network was trained on scans where people had already traced surfaces by hand. From the traced surfaces, the training code works out the correct cos, density and direction for every voxel. The network is then trained to reproduce those values from the scan alone.</p>
+      <svg class="flow" viewBox="0 0 640 150" role="img" aria-label="Training flow: traced surfaces give labels; the network learns to predict the labels from the scan; the loss compares them.">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+        </defs>
+        <g class="box"><rect x="6" y="14" width="138" height="48" rx="8"/><text x="75" y="43">CT scan</text></g>
+        <g class="box"><rect x="6" y="88" width="138" height="48" rx="8"/><text x="75" y="106">Hand-traced</text><text x="75" y="124">surfaces</text></g>
+        <g class="box"><rect x="206" y="88" width="138" height="48" rx="8"/><text x="275" y="106">Correct cos,</text><text x="275" y="124">density, direction</text></g>
+        <g class="box net"><rect x="206" y="14" width="138" height="48" rx="8"/><text x="275" y="43">3D U-Net</text></g>
+        <g class="box"><rect x="406" y="14" width="138" height="48" rx="8"/><text x="475" y="32">Predicted cos,</text><text x="475" y="50">density, direction</text></g>
+        <g class="box loss"><rect x="406" y="88" width="138" height="48" rx="8"/><text x="475" y="117">Compare</text></g>
+        <path class="arrow" d="M144 38 H206" marker-end="url(#ah)"/>
+        <path class="arrow" d="M144 112 H206" marker-end="url(#ah)"/>
+        <path class="arrow" d="M344 38 H406" marker-end="url(#ah)"/>
+        <path class="arrow" d="M344 112 H406" marker-end="url(#ah)"/>
+        <path class="arrow" d="M475 62 V88" marker-end="url(#ah)"/>
+        <path class="arrow back" d="M406 126 C 380 150, 300 150, 290 62" marker-end="url(#ah)"/>
+        <text class="cap" x="580" y="116" text-anchor="start">error</text>
+        <text class="cap" x="580" y="132" text-anchor="start">adjusts the</text>
+        <text class="cap" x="580" y="148" text-anchor="start">network</text>
+      </svg>
+    </div>
+  </details>
+
+  <h3>In practice</h3>
+  <p>The whole volume is processed in overlapping tiles, on one or more GPUs. The result is written to disk as OME-Zarr volumes, plus a <code>.lasagna.json</code> file that lists them. A run can be resumed if it is interrupted.</p>
+<pre><code>python lasagna/preprocess_cos_omezarr.py predict3d \
+  --input vol.zarr --output pred.lasagna.json \
+  --unet-checkpoint model_best.pt --cos-scaledown 2 --scaledown 4</code></pre>
+</section>
+
+<!-- ============================================================ STEP 2 -->
+<section id="lasagna-step2" class="sec" data-nav="Start a mesh" data-badge="2">
+  <h2><span class="tag">Step 2</span>Start a mesh</h2>
+  <p>The fitter describes the scroll with a <dfn>mesh</dfn>: a grid of 3D points. Lasagna keeps one grid for every winding and stacks them. Rows of a grid follow the height of the scroll. Columns follow the winding around the scroll.</p>
+  <p>To begin, the user gives a <dfn>seed</dfn>, a point that lies on one winding. The fitter also needs a rough first guess for the shape. This can be a cylinder or shell around the scroll center, or an existing surface. The first guess is smooth and its layers are evenly spaced, so it does not follow the real windings yet. Fixing that is step 3.</p>
+
+  <figure class="fig" id="figStart">
+    <div class="start-row">
+      <div class="stage dark" style="--ar: 640 / 400">
+        <canvas id="startCanvas" role="img" aria-label="Scan patch with a seed point and a first guess of evenly spaced layers that do not match the real windings."></canvas>
+        <svg id="startSvg" viewBox="0 0 640 400" aria-hidden="true"></svg>
+      </div>
+      <div class="stage panel" style="--ar: 1 / 1">
+        <canvas id="startStack" role="img" aria-label="The same layers shown as a 3D stack of mesh grids."></canvas>
+        <span class="note-tag">One layer = one grid of points</span>
+      </div>
+    </div>
+    <div class="controls">
+      <label for="layerCount">Layers to model</label>
+      <input type="range" id="layerCount" min="3" max="9" value="7">
+      <output id="layerCountOut">7</output>
+    </div>
+    <figcaption>Left: a slice through the scan with the seed (pulsing ring) and the first guess. The guess has the right number of layers and spacing, but the wrong shape. Right: the same layers as a 3D stack. Drag to rotate.</figcaption>
+  </figure>
+</section>
+
+<!-- ============================================================ STEP 3 -->
+<section id="lasagna-step3" class="sec" data-nav="Fit it" data-badge="3">
+  <h2><span class="tag">Step 3</span>Fit the mesh</h2>
+  <p>Now the optimizer moves the mesh points, a little at a time. After every step it checks how badly the mesh breaks a list of rules. The amounts are added into one number called the <dfn>loss</dfn>. The points then move in the direction that makes the loss smaller. This is gradient descent. There is no neural network in this step.</p>
+  <p>Press play. The three rules below are a simplified version of what the real fit does.</p>
+
+  <figure class="fig" id="figFit">
+    <div class="seg" role="group" aria-label="Background">
+      <button type="button" class="on" data-bg="scan">Scan</button>
+      <button type="button" data-bg="cos">cos</button>
+    </div>
+    <div class="stage dark" style="--ar: 640 / 400">
+      <canvas class="layer on" data-bg="scan"></canvas>
+      <canvas class="layer" data-bg="cos"></canvas>
+      <svg id="fitSvg" viewBox="0 0 640 400" role="img" aria-label="Mesh layers moving onto the windings of the scan."></svg>
+    </div>
+    <div class="controls wrap">
+      <button type="button" id="fitPlay" class="btn">Play</button>
+      <button type="button" id="fitReset" class="btn ghost">Reset</button>
+      <label class="chk"><input type="checkbox" id="rulePull" checked> Stay on the winding</label>
+      <label class="chk"><input type="checkbox" id="ruleDir" checked> Face the right way</label>
+      <label class="chk"><input type="checkbox" id="ruleSmooth" checked> Stay smooth</label>
+    </div>
+    <p class="meter">Step <b id="fitIter">0</b> · average distance from the winding <b id="fitErr">–</b> px</p>
+    <figcaption>Turn a rule off while it runs to see what it was doing. With only "face the right way", the lines tilt correctly but drift sideways. Without "stay smooth", they get ragged.</figcaption>
+  </figure>
+
+  <h3>The rules</h3>
+  <p>The real fit uses more rules than the toy. Each has a weight in the config file, so a stage can emphasize some and ignore others.</p>
+
+  <div class="cards">
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="A short line turns until it is square to an arrow.">
+        <line class="hint-d" x1="80" y1="60" x2="80" y2="16"/><path class="hint-d fill" d="M80 10 L74 22 L86 22 z"/>
+        <g><line class="mesh" x1="34" y1="60" x2="126" y2="60"/>
+          <animateTransform attributeName="transform" type="rotate" values="26 80 60;0 80 60;0 80 60;26 80 60" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite" calcMode="spline" keySplines=".4 0 .2 1;0 0 1 1;.4 0 .2 1"/>
+        </g>
+        <circle class="dot" cx="80" cy="60" r="3"/>
+      </svg>
+      <h4>Face the right way</h4>
+      <p>The layer must be square to the direction hint, so its normal lines up with the arrow.</p>
+      <code>normal</code>
+    </article>
+
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="Uneven dots slide until they are evenly spaced.">
+        <line class="mesh thin" x1="14" y1="50" x2="146" y2="50"/>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="20;20;20" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="38;44;44;38" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="70;68;68;70" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="78;92;92;78" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="118;116;116;118" keyTimes="0;.4;.7;1" dur="4s" repeatCount="indefinite"/></circle>
+        <circle class="dot big" cy="50" r="5"><animate attributeName="cx" values="140;140;140" dur="4s" repeatCount="indefinite"/></circle>
+      </svg>
+      <h4>Keep the grid even</h4>
+      <p>Neighboring points in a row stay about one mesh step apart, so the grid does not bunch up.</p>
+      <code>step</code>
+    </article>
+
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="A zigzag line relaxes into a gentle curve.">
+        <path class="mesh" d="M10 60 L35 30 L60 78 L85 28 L110 76 L135 40 L150 58" fill="none">
+          <animate attributeName="d" dur="4s" repeatCount="indefinite" keyTimes="0;.4;.7;1"
+            values="M10 60 L35 30 L60 78 L85 28 L110 76 L135 40 L150 58;M10 60 L35 52 L60 48 L85 46 L110 48 L135 52 L150 56;M10 60 L35 52 L60 48 L85 46 L110 48 L135 52 L150 56;M10 60 L35 30 L60 78 L85 28 L110 76 L135 40 L150 58"/>
+        </path>
+      </svg>
+      <h4>Stay smooth</h4>
+      <p>The surface may curve but it may not crumple. Sharp bends and folds are penalized.</p>
+      <code>smooth</code> <code>bend</code>
+    </article>
+
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="A point slides toward a bright surface.">
+        <defs><linearGradient id="gDt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--cos)" stop-opacity="0"/><stop offset="1" stop-color="var(--cos)" stop-opacity=".55"/></linearGradient></defs>
+        <rect x="10" y="10" width="140" height="66" fill="url(#gDt)"/>
+        <line class="surf" x1="10" y1="76" x2="150" y2="76"/>
+        <line class="guide" x1="80" y1="76" x2="80" y2="22"><animate attributeName="y2" values="22;76;76;22" keyTimes="0;.5;.8;1" dur="4s" repeatCount="indefinite"/></line>
+        <circle class="dot big" cx="80" cy="22" r="5"><animate attributeName="cy" values="22;76;76;22" keyTimes="0;.5;.8;1" dur="4s" repeatCount="indefinite"/></circle>
+      </svg>
+      <h4>Sit on a surface</h4>
+      <p>An optional second model predicts the distance to the nearest surface. Points are pulled toward distance zero.</p>
+      <code>pred_dt</code>
+    </article>
+
+    <article class="card">
+      <svg viewBox="0 0 160 100" role="img" aria-label="A layer moves until it is exactly one winding from the layer below it.">
+        <line class="mesh" x1="14" y1="78" x2="146" y2="78"/>
+        <g stroke="var(--dens)" stroke-width="1.5" opacity=".7">
+          <line x1="30" y1="78" x2="30" y2="50"/><line x1="60" y1="78" x2="60" y2="50"/><line x1="90" y1="78" x2="90" y2="50"/><line x1="120" y1="78" x2="120" y2="50"/>
+        </g>
+        <line class="mesh" x1="14" y1="20" x2="146" y2="20"><animate attributeName="y1" values="20;50;50;20" keyTimes="0;.5;.8;1" dur="4s" repeatCount="indefinite"/><animate attributeName="y2" values="20;50;50;20" keyTimes="0;.5;.8;1" dur="4s" repeatCount="indefinite"/></line>
+        <text class="small" x="146" y="95" text-anchor="end">gap = 1 winding</text>
+      </svg>
+      <h4>Next layer, next winding</h4>
+      <p>Add up the density between two layers. The total must be 1, so the next layer is exactly one winding away. This is how the fit counts windings.</p>
+      <code>winding_density</code>
+    </article>
+  </div>
+
+  <h3>Coarse to fine</h3>
+  <p>Moving single points would be slow, and a small error in one place could never pull its neighbors along. So the mesh is stored as a pyramid of five levels. The top level has only a few points and moves large regions together. Each level below adds finer detail on top of the one above.</p>
+
+  <figure class="fig" id="figPyr">
+    <svg id="pyrSvg" viewBox="0 0 640 240" role="img" aria-label="A wavy target curve and a mesh fit that gets more accurate as more points are added."></svg>
+    <div class="controls wrap">
+      <div class="seg" role="group" aria-label="Pyramid level" id="pyrLevels"></div>
+      <button type="button" id="pyrPlay" class="btn">Play</button>
+    </div>
+    <p class="meter" id="pyrInfo"></p>
+    <figcaption>One line of the mesh, fitted with more and more points. The grey curve is the shape the line has to follow.</figcaption>
+  </figure>
+
+  <h3>Stages</h3>
+  <p>A config file lists the stages of a fit. Each stage sets the number of steps, the learning rate (how far points may move per step), and the weight of each rule. The default <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/configs/init.json"><code>init.json</code></a> runs two stages:</p>
+  <div class="stages" aria-label="Two stages of the default config">
+    <div class="stage-bar" style="--w: 67"><b>Stage 1</b> 1,000 steps · learning rate 0.1<small>large moves</small></div>
+    <div class="stage-bar s2" style="--w: 33"><b>Stage 2</b> 500 steps · 0.01<small>careful moves</small></div>
+  </div>
+</section>
+
+<!-- ============================================================ STEP 4 -->
+<section id="lasagna-step4" class="sec" data-nav="Export" data-badge="4">
+  <h2><span class="tag">Step 4</span>Export the surfaces</h2>
+  <p>When the fit is done, every layer of the mesh is a surface of its own. <code>fit2tifxyz.py</code> writes one folder per winding in the <dfn>tifxyz</dfn> format. The folder holds three images, <code>x.tif</code>, <code>y.tif</code> and <code>z.tif</code>, plus a small <code>meta.json</code>.</p>
+  <p>Pixel (row, column) in those images stores the x, y and z coordinate of one mesh point. VC3D, the Volume Cartographer app, opens these surfaces directly. It can also start a fit by calling <code>fit_service.py</code> over HTTP.</p>
+
+  <figure class="fig" id="figExport">
+    <div class="export-row">
+      <div class="stage panel" style="--ar: 1 / 1">
+        <canvas id="exportStack" role="img" aria-label="The mesh layers pulled apart. One layer is highlighted."></canvas>
+      </div>
+      <div class="export-side">
+        <div class="controls wrap">
+          <label for="explode">Pull apart</label>
+          <input type="range" id="explode" min="0" max="100" value="0">
+        </div>
+        <div class="seg layer-pick" id="layerPick" role="group" aria-label="Choose a layer"></div>
+        <pre class="tree" id="tree"></pre>
+        <div class="tifs">
+          <figure><canvas id="tifX" width="48" height="32"></canvas><figcaption>x.tif</figcaption></figure>
+          <figure><canvas id="tifY" width="48" height="32"></canvas><figcaption>y.tif</figcaption></figure>
+          <figure><canvas id="tifZ" width="48" height="32"></canvas><figcaption>z.tif</figcaption></figure>
+        </div>
+        <p class="meter" id="tifRead">Point the cursor at an image to read one pixel.</p>
+      </div>
+    </div>
+    <figcaption>Pick a layer to see its three coordinate images. Brighter means a larger coordinate. The numbers in the readout are made up for this example.</figcaption>
+  </figure>
+
+  <p>The export converts mesh coordinates back to the voxel units of the original scan, so the surfaces line up with the full-resolution volume.</p>
+<pre><code>python lasagna/fit2tifxyz.py --input model.pt --output out_tifxyz/</code></pre>
+</section>
+
+<!-- ============================================================ REFERENCE -->
+<section id="lasagna-reference" class="sec" data-nav="Reference">
+  <h2><span class="tag">Reference</span>Words, files and limits</h2>
+
+  <h3>Words used on this page</h3>
+  <dl class="gloss">
+    <div><dt>Winding</dt><dd>One turn of the roll around its center.</dd></div>
+    <div><dt>Layer</dt><dd>One winding as it appears in the model: a grid of 3D points. The code and some docs call this a "sheet". In scroll anatomy a sheet is a manufactured piece of papyrus, and one sheet can span several windings. This page says layer or winding to avoid the mix-up.</dd></div>
+    <div><dt>Hint fields</dt><dd>The cos, density and direction values predicted by the network. The code calls them channels.</dd></div>
+    <div><dt>Normal</dt><dd>The direction that points straight out of a surface.</dd></div>
+    <div><dt>Seed</dt><dd>A point on one winding where a fit starts.</dd></div>
+    <div><dt>Mesh</dt><dd>A grid of connected 3D points that describes a surface.</dd></div>
+    <div><dt>Voxel</dt><dd>One cell of the 3D scan.</dd></div>
+    <div><dt>OME-Zarr</dt><dd>A chunked file format for volumes that are too large to load at once.</dd></div>
+    <div><dt>tifxyz</dt><dd>A surface stored as three images (x, y, z) plus a <code>meta.json</code>.</dd></div>
+    <div><dt>VC3D</dt><dd>The Volume Cartographer app, used to view and edit surfaces.</dd></div>
+  </dl>
+
+  <h3>Where each step lives</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Step</th><th>Files in <code>lasagna/</code></th></tr></thead>
+    <tbody>
+      <tr><td>Training the network</td><td><a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/train_tifxyz.py">train_tifxyz.py</a>, <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/tifxyz_lasagna_dataset.py">tifxyz_lasagna_dataset.py</a>, <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/tifxyz_labels.py">tifxyz_labels.py</a></td></tr>
+      <tr><td>1 Read the scan</td><td><a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/preprocess_cos_omezarr.py">preprocess_cos_omezarr.py</a>, <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/tiled_predict3d.py">tiled_predict3d.py</a>, <a href="https://github.com/ScrollPrize/villa/tree/main/lasagna/manager">manager/</a> (the <code>las_manager</code> command)</td></tr>
+      <tr><td>2 Start a mesh</td><td><a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/fit.py">fit.py</a>, <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/model.py">model.py</a>, <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/fit_data.py">fit_data.py</a></td></tr>
+      <tr><td>3 Fit the mesh</td><td><a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/optimizer.py">optimizer.py</a>, the <code>opt_loss_*.py</code> files (one per rule), <a href="https://github.com/ScrollPrize/villa/tree/main/lasagna/configs">configs/</a></td></tr>
+      <tr><td>4 Export</td><td><a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/fit2tifxyz.py">fit2tifxyz.py</a>, <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/fit_service.py">fit_service.py</a>, <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/tifxyz_format.md">tifxyz_format.md</a></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The neural network itself is not defined in <code>lasagna/</code>. It is the configurable U-Net from the sibling <code>vesuvius</code> package. For more detail, start with <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/docs/status.md">docs/status.md</a> and <a href="https://github.com/ScrollPrize/villa/blob/main/lasagna/lasagna_3d.md">lasagna_3d.md</a>.</p>
+
+  <h3>Things to keep in mind</h3>
+  <ul class="plain">
+    <li>The fit is only as good as the hints. Where the scan is damaged, cos and direction can be wrong, and the mesh will follow them.</li>
+    <li>A fit covers a limited region around the seed, not the whole scroll at once.</li>
+    <li>The pictures on this page are schematic. They use made-up data to show the idea.</li>
+  </ul>
+</section>
+
+</div>
+
+<div id="panel-tracer" role="tabpanel" aria-labelledby="tab-tracer" class="panel" hidden>
+  <header class="phead">
+    <p class="eyebrow">volume-cartographer · C++</p>
+    <h1>The patch tracer</h1>
+    <p class="lead">The tracer starts at one seed point and grows a surface patch outward along a predicted surface. It is part of VC3D. It is semi-automatic: it does the long stretches and a person fixes the rest.</p>
+    <p class="chips"><span class="pill">GrowPatch</span><span class="pill">Ceres solver</span><span class="pill">vc_grow_seg_from_seed</span></p>
+  </header>
+
+  <section id="tracer-idea" class="sec" data-nav="The idea">
+    <h2><span class="tag">The idea</span>Grow a mesh one corner at a time</h2>
+    <p>The input is a <dfn>surface prediction</dfn>: a volume that is 1 wherever a network thinks there is papyrus surface. On its own it is not a surface. It has holes, and in places two windings are joined. The tracer turns it into a mesh, a grid of quads, starting from a seed.</p>
+    <p>It keeps a state grid that records which corners of the mesh exist so far. Growth then repeats two phases:</p>
+    <ol class="plain">
+      <li>Add new corners greedily along the edge of the patch, for several rounds.</li>
+      <li>Run the optimizer over the new region and the strip of mesh behind it, so the new corners settle onto the surface.</li>
+    </ol>
+    <p>A set of rules of thumb decides when to accept a result and when to skip it. The optimizer is Ceres, a classical least-squares solver. The entry point is <code>vc_grow_seg_from_seed</code>, which calls <code>space_tracing_quad_phys</code> in <code>surface_helpers.cpp</code>.</p>
+
+    <p>Press play. The orange line is one row of the mesh seen from the side. It grows both ways from the seed.</p>
+    <figure class="fig" id="trGrow">
+      <div class="stage dark" style="--ar: 640 / 400">
+        <canvas id="trCanvas" role="img" aria-label="Synthetic surface prediction with a tracer growing along one winding."></canvas>
+        <svg id="trSvg" viewBox="0 0 640 400" aria-hidden="true"></svg>
+      </div>
+      <div class="controls wrap">
+        <button type="button" id="trPlay" class="btn">Play</button>
+        <button type="button" id="trReset" class="btn ghost">Reset</button>
+        <label class="chk"><input type="checkbox" id="trMerger" checked> Two windings merge in the prediction</label>
+        <label class="chk"><input type="checkbox" id="trCorr"> Add correction points</label>
+      </div>
+      <p class="meter" id="trMeter">Ready.</p>
+      <figcaption>Synthetic example. Bright bands are the surface prediction. The bright blob on the right is a merger: the network joined two windings there. Switch correction points on and replay to see a person's fix.</figcaption>
+    </figure>
+
+    <p>In three dimensions the same thing happens on a grid. Cells are committed in rings around the seed. The optimizer works mostly on the active fringe, and sometimes on the whole patch.</p>
+    <figure class="fig" id="trLattice">
+      <div class="stage panel" style="--ar: 640 / 250"><canvas id="latCanvas" role="img" aria-label="A grid of cells being filled in outward from a seed. The newest cells at the edge are highlighted."></canvas></div>
+      <div class="controls"><button type="button" id="latPlay" class="btn">Replay</button><span class="meter" id="latMeter" style="margin:0 0 0 .5rem"></span></div>
+      <figcaption>The state grid. Pale cells are committed. Orange cells are the active fringe that the next optimization round may move.</figcaption>
+    </figure>
+  </section>
+
+  <section id="tracer-rules" class="sec" data-nav="What it optimizes">
+    <h2><span class="tag">The rules</span>What the optimizer balances</h2>
+    <p>Each new corner is placed to balance several goals at once. The code generates these as separate loss terms, and some are only created where a location is not yet used by another term.</p>
+    <div class="cards">
+      <article class="card"><div class="icon" data-icon="ridge"></div><h4>Follow the prediction</h4><p>Corners are pulled onto the bright band of the surface prediction.</p></article>
+      <article class="card"><div class="icon" data-icon="straight"></div><h4>Stay smooth</h4><p>Three neighboring corners should lie on a straight line unless the data says otherwise.</p></article>
+      <article class="card"><div class="icon" data-icon="even"></div><h4>Keep the spacing</h4><p>Corners stay about one step apart, so the mesh does not stretch or pile up.</p></article>
+      <article class="card"><div class="icon" data-icon="normal"></div><h4>Match the normals</h4><p>A normal grid, a coarse field of local surface directions made by <code>vc_gen_normalgrids</code>, tells the mesh which way to face.</p></article>
+      <article class="card"><div class="icon" data-icon="neighbor"></div><h4>Resist the neighbor</h4><p>A nearby winding is easy to jump onto. The tracer is set up to resist that pull.</p></article>
+    </div>
+  </section>
+
+  <section id="tracer-fix" class="sec" data-nav="Fixing mistakes">
+    <h2><span class="tag">Failure modes</span>Where it goes wrong, and the fix</h2>
+    <p>The tracer follows a trail that the prediction only half defines. The common problems are:</p>
+    <ul class="plain">
+      <li><strong>Mergers.</strong> Two nearby windings are joined by mistake in the prediction.</li>
+      <li><strong>Holes.</strong> The predicted surface disappears.</li>
+      <li><strong>Sheet switches.</strong> The trace jumps from its winding to a neighboring one. Mergers often cause these, as in the figure above.</li>
+    </ul>
+    <p>The repo's workflow for correcting a patch, as documented, goes like this:</p>
+    <ol class="plain">
+      <li>Grow a patch with <code>vc_grow_seg_from_seed</code>. A snapshot interval saves intermediate states.</li>
+      <li>In VC3D, add one point collection for each broken area. The first point is on the correct surface near the problem. The others mark where the surface should go.</li>
+      <li>Optionally mask the area that should be removed.</li>
+      <li>Run the tracer again with <code>--resume</code> and <code>--correct</code>. The solver pulls the surface through the points and then keeps growing from there.</li>
+    </ol>
+    <p>The <code>z_min</code> and <code>z_max</code> parameters limit the z range. A thin band can be used to follow one long spiral.</p>
+  </section>
+
+  <section id="tracer-copy" class="sec" data-nav="Copy Out/In">
+    <h2><span class="tag">Copy Out/In</span>Use one winding to find the next</h2>
+    <p>Once one winding is traced well, the windings just outside and inside it usually have similar curvature. Copy Out/In uses a finished mesh as a geometric reference and moves the tracing over to the neighboring winding. In the repo this lives in <code>vc_grow_seg_from_seed.cpp</code> and <code>GrowPatch.cpp</code>.</p>
+    <p>Press the button to copy outward, one winding at a time.</p>
+    <figure class="fig" id="trCopy">
+      <div class="stage dark" style="--ar: 640 / 400">
+        <canvas id="cpCanvas" role="img" aria-label="A traced winding is copied outward onto the next windings."></canvas>
+        <svg id="cpSvg" viewBox="0 0 640 400" aria-hidden="true"></svg>
+      </div>
+      <div class="controls wrap">
+        <button type="button" id="cpStep" class="btn">Copy outward</button>
+        <button type="button" id="cpReset" class="btn ghost">Reset</button>
+        <label class="chk"><input type="checkbox" id="cpErr"> The source trace has a sheet switch</label>
+      </div>
+      <p class="meter" id="cpMeter">Source: winding 7.</p>
+      <figcaption>Schematic. With a clean source, each copy lands on the next winding. With a sheet switch in the source, the copies inherit it. This is why Copy Out/In speeds up tracing but still needs checking.</figcaption>
+    </figure>
+    <h3>The learned version</h3>
+    <p>A neural version of the same idea is in <code>vesuvius/…/neural_tracing/inference/infer_rowcol_triplet_wraps.py</code>. A 3D network looks at a crop of the scan around the existing surface and predicts displacement vectors. These are added to the surface points to give the neighboring windings. The inference code cuts the surface into overlapping boxes, averages test-time variants of each box, and merges the results. A checkpoint called <code>copy_displacement_latest</code> is published, and VC3D has a Neural Tracer panel for it.</p>
+    <details class="more">
+      <summary>Other learned tracers in the repo</summary>
+      <div class="more-body">
+        <p><strong>autoreg_mesh</strong> continues a partial winding one vertex at a time. For each vertex it predicts a cell in a coarse grid of volume features, a small offset inside that cell, and a stop flag.</p>
+        <p><strong>heatmap_single_point</strong> traces a patch from a start point by taking steps, and takes a new crop of the scan every few steps.</p>
+        <p><strong>fiber_trace_3d</strong> traces fibers. It is covered in the fibers tab.</p>
+      </div>
+    </details>
+  </section>
+</div>
+
+<div id="panel-fibers" role="tabpanel" aria-labelledby="tab-fibers" class="panel" hidden>
+  <header class="phead">
+    <p class="eyebrow">VC3D · lasagna · atlas</p>
+    <h1>Fibers and the atlas</h1>
+    <p class="lead">A papyrus fiber stays inside one winding. A line that follows a fiber is therefore a line that belongs to a single winding. Two fibers that cross can tell you how their windings relate. The atlas collects those facts.</p>
+    <p class="chips"><span class="pill">line annotation</span><span class="pill">fiber_trace_3d</span><span class="pill">atlas.py</span></p>
+  </header>
+
+  <section id="fibers-why" class="sec" data-nav="Why fibers">
+    <h2><span class="tag">Why fibers</span>A fiber never leaves its layer</h2>
+    <p>A manufactured sheet has two layers of strips. Each layer has its own fiber direction, and the two directions are roughly perpendicular. By convention the recto fibers run lengthwise on the unrolled roll and the verso fibers run across its height. A fiber lies inside one layer and does not pass through the sheet.</p>
+    <p>That makes a traced fiber useful evidence: all of its points are on one winding. It also gives a natural grid, because horizontal and vertical fibers can serve as the rows and columns of a surface.</p>
+    <p class="note">Fibers also cause trouble. Two fibers from different windings can lie close together and run in the same direction. Distance and direction alone cannot tell whether two fibers share a surface. A person, or a careful tracer, has to look at the surroundings.</p>
+  </section>
+
+  <section id="fibers-trace" class="sec" data-nav="Tracing a fiber">
+    <h2><span class="tag">Tracing</span>A few clicks, then the tracer fills in</h2>
+    <p>In VC3D, a person places control points along a fiber with the line annotation widget. Between two control points the line can be made in different ways. It can be a smooth curve through the points (<code>cspline</code>), or it can be found with the predicted fields, the normals and winding density from Lasagna (<code>lasagna</code> and <code>trace</code>). The record is a <code>vc3d_fiber</code> JSON file with the line points, the control points and the way each segment was made.</p>
+    <figure class="fig" id="fbTrace">
+      <div class="stage dark" style="--ar: 640 / 400">
+        <canvas id="fbCanvas" role="img" aria-label="A fiber on one winding with control points, a smooth curve through the points, and a traced line that follows the winding."></canvas>
+        <svg id="fbSvg" viewBox="0 0 640 400" aria-hidden="true"></svg>
+      </div>
+      <div class="controls">
+        <label for="fbPts">Control points</label>
+        <input type="range" id="fbPts" min="2" max="9" value="4">
+        <output id="fbPtsOut">4</output>
+      </div>
+      <p class="meter" id="fbMeter"></p>
+      <figcaption>Synthetic example. White dots are control points. Dashed: a smooth curve through them. Solid orange: a line that follows the predicted fields. With few points the smooth curve cuts corners and can leave the winding.</figcaption>
+    </figure>
+    <p>Fibers can also be predicted. The <code>fiber_hz_vt</code> checkpoint is an nnU-Net trained on horizontal and vertical fibers that people traced by hand years ago on older scans. The <code>fiber_trace</code> package trains a model on fiber records using direction-conditioned 3D crops. Its sibling <code>fiber_trace_3d</code> appears as the optimizer name (<code>native_fiber_trace3d</code>) in saved fiber files.</p>
+  </section>
+
+  <section id="fibers-atlas" class="sec" data-nav="The atlas">
+    <h2><span class="tag">The atlas</span>Fibers placed on a common map</h2>
+    <p>The atlas answers one question: how many windings apart are these fibers? It keeps a base mesh, taken from one of the <code>shell_*.tifxyz</code> surfaces of a Lasagna fit. Each fiber is projected onto that mesh using the Lasagna normals. The projection gives every point on the fiber two coordinates on the base mesh, <code>atlasU</code> and <code>atlasV</code>. Those never change.</p>
+    <p>What changes is an integer for each fiber, its <code>winding_offset</code>. A fiber's real position is its stored position plus the offset times the period, the width of one winding on the base mesh:</p>
+    <pre><code>actual_atlasU = anchor.atlasU + winding_offset * period_columns</code></pre>
+    <p>Offsets come from <em>links</em>. A person inspects a place where two fibers cross and picks one of three answers: same winding, different winding, or hard to say. Accepting "same winding" adds a link with a winding difference of 0. The layout step starts at a root fiber with offset 0 and walks through the links, giving every fiber the offset its links imply.</p>
+    <figure class="fig" id="fbAtlas">
+      <div class="stage panel" style="--ar: 640 / 320"><svg id="atSvg" viewBox="0 0 640 320" role="img" aria-label="Fibers drawn on repeated tiles of the base mesh. Accepting links moves each fiber to the tile its offset gives."></svg></div>
+      <div class="controls wrap">
+        <button type="button" id="atNext" class="btn">Accept next link</button>
+        <button type="button" id="atReset" class="btn ghost">Reset</button>
+      </div>
+      <ul class="links" id="atLinks"></ul>
+      <p class="meter" id="atInfo"></p>
+      <figcaption>Each tile is one winding of the base mesh. The last link disagrees with the others. The layout keeps the first answer it found and reports the conflict.</figcaption>
+    </figure>
+    <p>The layout treats the links as an undirected graph. Fibers that no link reaches keep offset 0. A cycle of links that disagree is reported as a conflict, and the assignment stays deterministic. The details are in <a href="https://github.com/ScrollPrize/villa/blob/main/volume-cartographer/docs/atlas_implementation.md">atlas_implementation.md</a>.</p>
+  </section>
+
+  <section id="fibers-use" class="sec" data-nav="What it gives">
+    <h2><span class="tag">Output</span>Evidence for the global fit</h2>
+    <p>Fibers do not make surfaces on their own. They make winding constraints: lines that share a winding, and pairs of fibers that are a known number of windings apart. The <a href="#spiral">spiral fit</a> takes them as input. Lasagna can also grow a patch around a fiber, and the patch can then go into the fit.</p>
+    <p>The tracer is not fully automatic. A person drives it through the line annotation widget in VC3D, and the atlas workflow needs a person's decision at every crossing.</p>
+  </section>
+</div>
+
+<div id="panel-spiral" role="tabpanel" aria-labelledby="tab-spiral" class="panel" hidden>
+  <header class="phead">
+    <p class="eyebrow">spiral-fitting · PyTorch · NVIDIA GPU</p>
+    <h1>The spiral fit</h1>
+    <p class="lead">Most tools build surfaces piece by piece and end up with a pile of pieces. The spiral fit works the other way. It takes the whole pile, patches, fibers and annotations alike, and bends one ideal spiral until it agrees with as much of it as possible.</p>
+    <p class="chips"><span class="pill">fit_spiral.py</span><span class="pill">Python 3.14</span><span class="pill">whole scroll</span></p>
+  </header>
+
+  <section id="spiral-idea" class="sec" data-nav="The idea">
+    <h2><span class="tag">The idea</span>An ideal scroll, then a smooth crush</h2>
+    <p>A scroll started as one long, nearly rectangular sheet, rolled up. Seen from the end that is a spiral. The fit models it as an Archimedean spiral, where the radius grows in proportion to the angle:</p>
+    <pre><code>r(θ) = ω · θ / 2π</code></pre>
+    <p>One number, ω, is the distance from one winding to the next. A point on the ideal sheet is addressed by the angle θ along the spiral and the height z. Together they give a 3D point.</p>
+    <p>The eruption crushed that spiral. The fit models the damage as a <dfn>diffeomorphism</dfn>: a smooth map of space that can be undone. It cannot tear the sheet, push it through itself or squash it to a point. If it starts as a spiral, it is still a spiral afterward. Because it can be undone, any point in the scan maps back onto the ideal sheet. That reverse map is the virtual unrolling.</p>
+    <figure class="fig" id="spMorph">
+      <div class="two wide">
+        <div class="stage dark" style="--ar: 640 / 400"><svg id="spmSvg" viewBox="0 0 640 400" role="img" aria-label="An ideal spiral and the same spiral after a smooth deformation. Move the pointer over it to read the winding number."></svg></div>
+      </div>
+      <div class="controls">
+        <label for="spmT">Deformation</label>
+        <input type="range" id="spmT" min="0" max="100" value="0">
+        <button type="button" id="spmPlay" class="btn">Play</button>
+      </div>
+      <p class="meter" id="spmRead">Move the pointer over the spiral.</p>
+      <figcaption>Schematic cross-section. Left to right on the slider: the ideal spiral, then the same spiral after a smooth, invertible deformation. Point at any part of it to see which winding it is and where it sits on the ideal sheet.</figcaption>
+    </figure>
+    <p>The deformation has three parts, applied in order: a coarse scale and shear, the flow of a smooth velocity field (the main part), and a local change of the gap between windings. The flow works like dust in a steady wind. Every point rides along the arrows for one unit of time. Running the wind backward gives the exact inverse. The same machinery is used in medical image registration. In the code the flow is integrated with a few Runge-Kutta steps.</p>
+  </section>
+
+  <section id="spiral-inputs" class="sec" data-nav="What goes in">
+    <h2><span class="tag">Inputs</span>Any evidence, in any mix</h2>
+    <p>Each kind of evidence becomes a loss term that says what the deformed spiral should look like. No single kind has to cover the scroll.</p>
+    <div class="cards">
+      <article class="card"><h4>Surface patches</h4><p><code>tifxyz</code> meshes from the tracer, Lasagna or Copy Out/In. A patch should coincide with a single winding over its whole extent. Verified patches are best.</p></article>
+      <article class="card"><h4>Same-winding lines</h4><p>Point collections or traced fibers. All their points land on one winding, whichever it is.</p></article>
+      <article class="card"><h4>Relative winding</h4><p>Points marked as a known number of windings apart, such as "exactly one wrap from that point".</p></article>
+      <article class="card"><h4>Absolute winding</h4><p>Points marked with a winding number, such as "this patch is on winding 20". They fix the global numbering.</p></article>
+      <article class="card"><h4>Predicted fields</h4><p>Lasagna normals and gradient magnitude (how dense the windings are), plus skeleton tracks taken from a surface prediction.</p></article>
+      <article class="card"><h4>Scroll structure</h4><p>The umbilicus, the central axis as a function of z. It is required. An outer shell mesh is optional and pins down where the spiral ends.</p></article>
+    </div>
+    <p>The winding annotations are what make the biggest difference. The project's own view is that short, accurate winding constraints, made at scale, are the fastest route to unrolling many scrolls, because the global fit supplies the rest. See <a href="https://scrollprize.org/open_problems/winding_annotations">the winding constraints page</a>.</p>
+  </section>
+
+  <section id="spiral-fit" class="sec" data-nav="How it fits">
+    <h2><span class="tag">Fitting</span>Gradient descent on the deformation</h2>
+    <p>Fitting is an inverse problem. The unknowns are ω and the parameters of the deformation. All of them are optimized together with Adam, minimizing a weighted sum of the loss terms. Some examples:</p>
+    <ul class="plain">
+      <li>Points from a same-winding line must land on some winding surface, and the same one.</li>
+      <li>Two points marked <em>k</em> windings apart must land exactly <em>k</em> windings apart.</li>
+      <li>A verified patch must coincide with one winding.</li>
+      <li>The innermost winding wraps the umbilicus and the outermost follows the outer shell.</li>
+      <li>Regularization terms keep the sheet from distorting.</li>
+    </ul>
+    <p>The toy below fits a small version of that. Colored pieces are evidence: each one is a stretch of a known winding. The grey line is where the windings really are. The fit never sees it. Slide the coverage down to give the fit less evidence, and watch the spiral bridge the gaps.</p>
+    <figure class="fig" id="spFit">
+      <div class="stage dark" style="--ar: 640 / 400"><svg id="spfSvg" viewBox="0 0 640 400" role="img" aria-label="Evidence pieces on a crushed spiral and an orange fitted spiral moving onto them."></svg></div>
+      <div class="controls wrap">
+        <button type="button" id="spfPlay" class="btn">Play</button>
+        <button type="button" id="spfReset" class="btn ghost">Reset</button>
+        <label for="spfCov">Evidence</label>
+        <input type="range" id="spfCov" min="2" max="24" value="14" style="max-width:12rem">
+        <label class="chk"><input type="checkbox" id="spfTruth" checked> Show where the windings really are</label>
+      </div>
+      <p class="meter" id="spfMeter"></p>
+      <figcaption>Toy version: the real fit works in 3D with many more terms. Here each piece says "this stretch lies on winding <em>k</em>", and the deformation is a smooth field on a coarse grid.</figcaption>
+    </figure>
+  </section>
+
+  <section id="spiral-out" class="sec" data-nav="What comes out">
+    <h2><span class="tag">Output</span>One mesh per winding</h2>
+    <p>The fit samples each winding of the fitted spiral on a regular grid of angle and height, pushes the samples through the deformation into scan coordinates, and writes each winding as a <code>tifxyz</code> mesh. Two versions are written for each winding:</p>
+    <ul class="plain">
+      <li><code>wNNN</code>: the pure fitted surface.</li>
+      <li><code>wNNN_spliced</code>: the same, with the geometry of verified patches spliced in wherever the fit and the patch agree. More accurate locally where trusted geometry exists.</li>
+    </ul>
+    <p>Because these are ordinary <code>tifxyz</code> files, everything downstream works as usual: load them in VC3D, flatten them, and render surface volumes for ink detection. The fit also writes a checkpoint, and statistics on how much of each kind of evidence the final surface honors. For PHerc. Paris 4 (Scroll 1), the published fit has 130 windings.</p>
+  </section>
+
+  <section id="spiral-run" class="sec" data-nav="Running it">
+    <h2><span class="tag">Run it</span>From a dataset to meshes</h2>
+    <p>It needs Python 3.14 or newer and an NVIDIA GPU. The inputs come as a dataset folder with a conventional layout, plus a small <code>spiral-scroll.json</code> that records the voxel size and which way the spiral turns outward (<code>CW</code> or <code>ACW</code>). A person reads that direction off the scan in VC3D.</p>
+<pre><code>cd spiral-fitting
+uv sync
+python fit_spiral.py --dataset ./spiral_datasets/phercparis4</code></pre>
+    <p>The run does 30,000 optimization steps by default. Settings are a flat set of named options in <code>config.py</code>, overridden as JSON in the <code>FIT_SPIRAL_CONFIG_OVERRIDES</code> variable. A first run on a small slice range, for example 1,000 slices, is a good start on a smaller GPU. The <code>spiral_service.py</code> script runs a fit session as a service for the Spiral workspace in VC3D.</p>
+    <p class="note">Where the evidence is thin or the scan is ambiguous, the fit is under-constrained. It may then not follow the true sheets. Verified, hard constraints are preferred over soft ones.</p>
+    <p>The full tutorial is <a href="https://scrollprize.org/tutorial_spiral">spiral fitting tutorial</a>. The paper <a href="https://arxiv.org/abs/2512.04927">Virtually Unrolling the Herculaneum Papyri by Diffeomorphic Spiral Fitting</a> describes an earlier, fully automatic version that fits only raw surface-prediction tracks.</p>
+  </section>
+</div>
+
+<div id="panel-winding" role="tabpanel" aria-labelledby="tab-winding" class="panel" hidden>
+  <header class="phead">
+    <p class="eyebrow">vesuvius · neural_tracing · winding_models</p>
+    <h1>The winding model</h1>
+    <p class="lead">Most methods find surfaces and then count them. The winding model reads the count directly. A neural network looks at a thin 3D slab of the scan along a ray and predicts how many windings the ray passes through. Many rays together give a dense map of winding numbers.</p>
+    <p class="chips"><span class="pill">infer_winding_volume.py</span><span class="pill">train_winding_model.py</span><span class="pill">feeds the spiral fit</span></p>
+  </header>
+
+  <section id="winding-ray" class="sec" data-nav="One ray">
+    <h2><span class="tag">One ray</span>A phase that counts windings</h2>
+    <p>The input is one slab of the scan, sampled around a ray. The ray is cast along the surface normal, so it crosses the windings one after another. The slab is narrow across the ray and long along it.</p>
+    <p>For every column of voxels in the slab, the network predicts a <dfn>phase</dfn>: a number that goes up along the ray. It rises by 1 across each winding, so every time it passes a whole number the ray is crossing a winding. The network makes the phase increase by predicting only positive steps and adding them up. Each step equals the winding density over a short stretch of the ray.</p>
+    <p>The phase has one unknown shift, because the network cannot know the winding's absolute number. The shift is fixed by a <dfn>seed</dfn>: a point on a fitted spiral, where the winding number is known. The ray is built so that the seed's winding is at its midpoint. Once the seed crossing is named, every other crossing is numbered from it.</p>
+
+    <figure class="fig" id="wmRay">
+      <div class="ray-row">
+        <div class="stage dark" style="--ar: 640 / 400">
+          <canvas id="wmCanvas" role="img" aria-label="Synthetic scan patch with a ray crossing several windings."></canvas>
+          <svg id="wmSvg" viewBox="0 0 640 400" aria-label="Ray and crossings. Move the pointer to move the ray."></svg>
+        </div>
+        <svg id="wmPlot" viewBox="0 0 150 400" class="profile" aria-hidden="true"></svg>
+      </div>
+      <div class="controls wrap">
+        <label for="wmNoise">Model error</label>
+        <input type="range" id="wmNoise" min="0" max="100" value="25" style="max-width:12rem">
+        <label class="chk"><input type="checkbox" id="wmShift"> Show the raw phase, before the seed fixes the shift</label>
+      </div>
+      <p class="meter" id="wmMeter"></p>
+      <figcaption>Synthetic example. The ray follows the surface normal. The curve on the right is the predicted phase along it. White dots on the scan are the crossings, labeled with winding numbers counted from the seed (the ring). Move the pointer to move the ray.</figcaption>
+    </figure>
+  </section>
+
+  <section id="winding-many" class="sec" data-nav="Many rays">
+    <h2><span class="tag">Many rays</span>Rays that agree with each other</h2>
+    <p>The inference script casts rays from a fitted spiral. It places seeds on the fitted surface every few windings, at a regular spacing along the winding and along z. Each ray gives crossings with absolute winding numbers. The crossings are stored as points with a number and a confidence, and a vote over all overlapping slabs fills a volume with winding numbers.</p>
+    <p>There is a catch. The seed's number comes from the spiral, and where the spiral is locally wrong, the number is wrong, and so is every crossing on that ray. A wrong ray is off by a whole winding. It looks fine on its own.</p>
+    <p>The fix uses the overlaps. Neighboring slabs see the same sheets. If two rays pass through the same sheet but give it different numbers, one of them is off. An optional mode, <code>--phase-registration overlap</code>, finds nearby seeds in world coordinates, compares their phase fields where they overlap, and solves one correction per slab. The graph has no edges that come from winding adjacency or from the spiral. The seed's winding is only a weak hint to settle the overall numbering.</p>
+    <figure class="fig" id="wmMany">
+      <div class="stage dark" style="--ar: 640 / 400">
+        <canvas id="wmmCanvas" role="img" aria-label="Synthetic scan with many rays. Crossings are colored by winding number."></canvas>
+        <svg id="wmmSvg" viewBox="0 0 640 400" aria-hidden="true"></svg>
+      </div>
+      <div class="controls wrap">
+        <button type="button" id="wmRegen" class="btn ghost">New wrong rays</button>
+        <label class="chk"><input type="checkbox" id="wmSync"> Correct with overlaps</label>
+      </div>
+      <p class="meter" id="wmmMeter"></p>
+      <figcaption>Toy version. Dot colors repeat every six windings, so a sheet should be one color along its length. Some rays start off by one winding. In this toy we know the true numbers. The real method does not, and relies on agreement between neighbors.</figcaption>
+    </figure>
+  </section>
+
+  <section id="winding-out" class="sec" data-nav="What comes out">
+    <h2><span class="tag">Output</span>Points, a volume, and supervision</h2>
+    <p>One run of <code>infer_winding_volume.py</code> writes a single Zarr group:</p>
+    <ul class="plain">
+      <li><code>winding</code> and <code>confidence</code>: a volume of winding numbers, and how much to trust each. Only the chunks that were inferred exist.</li>
+      <li><code>points/*</code> and <code>strips/*</code>: one record for every crossing, and the column each came from.</li>
+    </ul>
+    <p>From there the output goes three ways.</p>
+    <ul class="plain">
+      <li><strong>Into the spiral fit.</strong> <code>export_spiral_supervision.py</code> turns the crossings into a compact store. The fit then trains on long relative-winding pairs and on pairs of adjacent crossings. A pair of adjacent crossings gives the density: one winding divided by the gap.</li>
+      <li><strong>Into a global field.</strong> <code>merge_winding_field.py</code> reconciles billions of crossing points into one smooth winding field by gradient descent, and writes a sparse OME-Zarr pyramid that VC3D can stream. A winding field on a connected spiral must have one thin seam per turn, where the number jumps. The script reports the seam and does not hide it.</li>
+      <li><strong>Into centerlines.</strong> <code>winding_centerlines.py</code> reduces each winding label to one ordered line per z plane, and can export them as <code>tifxyz</code>.</li>
+    </ul>
+    <p>Running the network is the slow part. For this reason there is a <em>native phase cache</em>: inference can stop after the network and save its raw phase output. The reconstruction can then be run again, with different settings, without the network. See <a href="https://github.com/ScrollPrize/villa/blob/main/vesuvius/src/vesuvius/neural_tracing/winding_models/NATIVE_PHASE_CACHE.md">NATIVE_PHASE_CACHE.md</a>.</p>
+    <details class="more">
+      <summary>What the network looks like</summary>
+      <div class="more-body">
+        <p>The input slab is sampled around the ray, with two short transverse axes and a long axis along the ray. A 3D convolutional encoder halves only the transverse axes, so features keep their position along the ray. Blocks of axial attention then do the long-range work: one attention along the ray for each column, and one across the transverse plane for each position along the ray. A light decoder restores the transverse resolution.</p>
+        <p>Every prediction head runs per column, so the network predicts winding structure across the whole slab, not just on the central ray. The central ray is only the sampling frame. The native output is 32 × 32 × 384 values per slab. Older checkpoints also have a crossing head and a variance head. Newer ones decode crossings from the phase alone.</p>
+      </div>
+    </details>
+    <p class="note">The winding model needs a fitted spiral to cast its rays from, and a rays-only view cannot recover a region that no ray passed through. Check the registration statistics before treating a result as final.</p>
+  </section>
+</div>
+
+<div id="panel-thaumato" role="tabpanel" aria-labelledby="tab-thaumato" class="panel" hidden>
+  <header class="phead">
+    <p class="eyebrow">deprecated/thaumato-anakalyptor · 2023 Grand Prize</p>
+    <h1>ThaumatoAnakalyptor</h1>
+    <p class="lead">An older, self-contained pipeline that goes from a raw scan to a mesh with almost no human input. It finds surface points, groups them into patches, then works out which winding each patch is on. It is kept in the repo under <code>deprecated/</code>. It was part of the first-place Grand Prize submission to the 2023 Vesuvius Challenge, by Youssef Nader, Luke Farritor and Julian Schilliger.</p>
+    <p class="chips"><span class="pill warn">deprecated</span><span class="pill">point cloud</span><span class="pill">graph solver</span></p>
+  </header>
+
+  <section id="thaumato-steps" class="sec" data-nav="The pipeline">
+    <h2><span class="tag">The pipeline</span>Points, patches, graph, mesh</h2>
+    <ol class="pipeline" id="thSteps">
+      <li><b>1</b><span><strong>Surface points.</strong> Use 3D derivatives of brightness to find the papyrus surface voxels.</span></li>
+      <li><b>2</b><span><strong>Patches.</strong> Split the point cloud into blocks and cluster the points into patches with a 3D instance segmentation network (Mask3D).</span></li>
+      <li><b>3</b><span><strong>Graph.</strong> Make a node for each patch and an edge wherever two patches overlap.</span></li>
+      <li><b>4</b><span><strong>Windings.</strong> Solve for the winding angle of every node, so each patch is placed on its turn of the roll.</span></li>
+      <li><b>5</b><span><strong>Mesh.</strong> Rebuild a surface from the points of one sheet with Poisson reconstruction, then texture it with Volume Cartographer's renderer.</span></li>
+    </ol>
+  </section>
+
+  <section id="thaumato-points" class="sec" data-nav="Surface points">
+    <h2><span class="tag">Step 1</span>Finding the surface with derivatives</h2>
+    <p>Seen from the side, a papyrus sheet is a bell-shaped bump in voxel brightness. The 3D gradient of the volume gives the local normal of the sheet. Along that normal, the first and second derivatives of brightness tell where the bump is. Thresholding on them marks surface voxels, and the marked voxels form a point cloud with a normal at every point.</p>
+    <figure class="fig" id="thProfile">
+      <svg id="thpSvg" viewBox="0 0 640 300" role="img" aria-label="Brightness along a line through two sheets, with its first and second derivative and the points that pass the threshold."></svg>
+      <div class="controls">
+        <label for="thpThr">Threshold</label>
+        <input type="range" id="thpThr" min="5" max="95" value="55">
+        <output id="thpOut">55%</output>
+      </div>
+      <figcaption>Synthetic example. Top: brightness along the normal through two sheets. Middle and bottom: its first and second derivative. Dots mark the positions that pass both thresholds. Too low a threshold marks noise. Too high a threshold misses faint sheets.</figcaption>
+    </figure>
+  </section>
+
+  <section id="thaumato-windings" class="sec" data-nav="Winding angles">
+    <h2><span class="tag">Steps 3 and 4</span>The sheet stitching problem</h2>
+    <p>After clustering, there are thousands of patches. Neighbors along a sheet overlap, and so do neighbors on adjacent windings. Each edge in the graph carries a hint about how the two winding angles relate. Along a sheet the angle changes a little. Across to the next winding it changes by 360°.</p>
+    <p>The unknown is the absolute winding angle of every node. A first guess comes from spreading values out along a spanning tree. That guess is often wrong: one bad edge sends a whole branch onto the wrong winding. The solver then repairs it. Two solvers are in the repo, a spring-based graph solver in C++ and a GPU belief-propagation solver with iterated MAP estimation and Laplacian smoothing.</p>
+    <figure class="fig" id="thGraph">
+      <div class="stage dark" style="--ar: 640 / 400"><svg id="thgSvg" viewBox="0 0 640 400" role="img" aria-label="Patches along a spiral colored by assigned winding. Wrong edges send some patches to the wrong winding until the solver repairs them."></svg></div>
+      <div class="controls wrap">
+        <button type="button" id="thgPlay" class="btn">Solve</button>
+        <button type="button" id="thgReset" class="btn ghost">Reset</button>
+      </div>
+      <p class="meter" id="thgMeter"></p>
+      <figcaption>Toy version. Each dot is a patch on a spiral. Its color is the winding the solver currently assigns, and a ring marks a patch on the wrong winding. Red dashed edges give wrong hints. The toy repairs them by letting each patch follow the majority of its neighbors. The real solvers use belief propagation or springs.</figcaption>
+    </figure>
+  </section>
+
+  <section id="thaumato-run" class="sec" data-nav="Running it">
+    <h2><span class="tag">Run it</span>Heavy, and mostly historical</h2>
+    <p>The pipeline needs an RTX 4090 class GPU with 24 GB, about 196 GB of RAM plus swap, and at least 32 CPU threads. The precomputation alone is expected to take days. Intermediate data takes about twice the space of the scan. It also works on 8 µm grid cells, so 4 µm scans are halved first.</p>
+    <p>The commands run in order: <code>generate_half_sized_grid</code>, <code>grid_to_pointcloud</code>, <code>pointcloud_to_instances</code>, <code>instances_to_graph</code>, the C++ <code>graph_problem</code> solver, <code>graph_to_mesh</code> and <code>large_mesh_to_surface</code>. The project README has the full list, with arguments.</p>
+    <p>The repo's own TODO says that a better sheet-stitching algorithm is the thing to implement next. Later work in this repo, the spiral fit above all, takes a different route to the same problem.</p>
+  </section>
+</div>
+
+</main>
+
+<footer class="foot">
+  <p>Static page. No server or network needed: open <code>manuals/lasagna/index.html</code> in a browser. All pictures use made-up data. Written in October 2026 from the documentation and code in the <a href="https://github.com/ScrollPrize/villa">villa repository</a>. The linked sources are the reference; they change faster than this page.</p>
+</footer>
+
+<script src="core.js"></script>
+<script src="tabs.js"></script>
+<script src="icons.js"></script>
+<script src="lasagna.js"></script>
+<script src="overview.js"></script>
+<script src="tracer.js"></script>
+<script src="fibers.js"></script>
+<script src="spiral.js"></script>
+<script src="winding.js"></script>
+<script src="thaumato.js"></script>
+</body>
+</html>
